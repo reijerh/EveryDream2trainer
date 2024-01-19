@@ -27,6 +27,8 @@ from diffusers.optimization import get_scheduler
 from colorama import Fore, Style
 import pprint
 
+from plugins.plugins import PluginRunner
+
 BETAS_DEFAULT = [0.9, 0.999]
 EPSILON_DEFAULT = 1e-8
 WEIGHT_DECAY_DEFAULT = 0.01
@@ -120,8 +122,9 @@ class EveryDreamOptimizer():
         else:
             return 0.0
 
-    def step(self, loss, step, global_step):
+    def step(self, loss, step, global_step, plugin_runner: PluginRunner, ed_state: 'EveryDreamTrainingState'):
         self.scaler.scale(loss).backward()
+        plugin_runner.run_on_backpropagation(ed_state=ed_state)
 
         if ((global_step + 1) % self.grad_accum == 0) or (step == self.epoch_len - 1):
             if self.clip_grad_norm is not None:
@@ -142,6 +145,7 @@ class EveryDreamOptimizer():
                 self.log_writer.add_scalar("optimizer/te_grad_norm", te_grad_norm, global_step)
 
             for optimizer in self.optimizers:
+                # the scaler steps the optimizer on our behalf
                 self.scaler.step(optimizer)
 
             self.scaler.update()
@@ -480,6 +484,7 @@ class EveryDreamOptimizer():
     def _apply_text_encoder_freeze(self, text_encoder) -> chain[Any]:
         num_layers = len(text_encoder.text_model.encoder.layers)
         unfreeze_embeddings = True
+        unfreeze_position_embeddings = True
         unfreeze_last_n_layers = None
         unfreeze_final_layer_norm = True
         if "freeze_front_n_layers" in self.te_freeze_config:
@@ -499,7 +504,6 @@ class EveryDreamOptimizer():
             unfreeze_last_n_layers = num_layers
         else:
             # something specified:
-            assert(unfreeze_last_n_layers > 0)
             if unfreeze_last_n_layers < num_layers:
                 # if we're unfreezing layers then by default we ought to freeze the embeddings
                 unfreeze_embeddings = False
@@ -508,11 +512,13 @@ class EveryDreamOptimizer():
             unfreeze_embeddings = not self.te_freeze_config["freeze_embeddings"]
         if "freeze_final_layer_norm" in self.te_freeze_config:
             unfreeze_final_layer_norm = not self.te_freeze_config["freeze_final_layer_norm"]
+        if "freeze_position_embeddings" in self.te_freeze_config:
+            unfreeze_position_embeddings = not self.te_freeze_config["freeze_position_embeddings"]
 
         parameters = itertools.chain([])
 
         if unfreeze_embeddings:
-            parameters = itertools.chain(parameters, text_encoder.text_model.embeddings.parameters())
+            parameters = itertools.chain(parameters, text_encoder.text_model.embeddings.token_embedding.parameters())
         else:
             print(" ❄️ freezing embeddings")
 
@@ -530,6 +536,15 @@ class EveryDreamOptimizer():
         else:
             print(" ❄️ freezing final layer norm")
 
+        if unfreeze_position_embeddings:
+            parameters = itertools.chain(parameters, text_encoder.text_model.embeddings.position_embeddings.parameters)
+        else:
+            print(" ❄️ freezing position embeddings")
+
+        # make sure there's some requires_grad in some places
+        parameters = list(parameters)
+        set_requires_grad(text_encoder.parameters(), False)
+        set_requires_grad(parameters, True)
         return parameters
 
 
@@ -548,3 +563,7 @@ def log_optimizer(label: str, optimizer: torch.optim.Optimizer, betas, epsilon, 
     logging.info(f"{Fore.CYAN} * {label} optimizer: {optimizer.__class__.__name__} {param_info} *{Style.RESET_ALL}")
     logging.info(f"{Fore.CYAN}    lr: {lr}, betas: {betas}, epsilon: {epsilon}, weight_decay: {weight_decay} *{Style.RESET_ALL}")
 
+
+def set_requires_grad(params, requires_grad: bool):
+    for param in params:
+        param.requires_grad = requires_grad

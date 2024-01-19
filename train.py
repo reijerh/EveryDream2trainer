@@ -57,6 +57,7 @@ from data.data_loader import DataLoaderMultiAspect
 from data.every_dream import EveryDreamBatch, build_torch_dataloader
 from data.every_dream_validation import EveryDreamValidator
 from data.image_train_item import ImageTrainItem, DEFAULT_BATCH_ID
+from plugins.plugins import PluginRunner
 from utils.huggingface_downloader import try_download_model_from_hf
 from utils.convert_diff_to_ckpt import convert as converter
 from utils.isolate_rng import isolate_rng
@@ -118,12 +119,12 @@ def convert_to_hf(ckpt_path):
 
 class EveryDreamTrainingState:
     def __init__(self,
-                 optimizer: EveryDreamOptimizer,
-                 train_batch: EveryDreamBatch,
+                 optimizer: Optional[EveryDreamOptimizer],
+                 train_batch: Optional[EveryDreamBatch],
                  unet: UNet2DConditionModel,
                  text_encoder: CLIPTextModel,
                  tokenizer: CLIPTokenizer,
-                 scheduler,
+                 scheduler: Optional,
                  vae: AutoencoderKL,
                  unet_ema: Optional[UNet2DConditionModel],
                  text_encoder_ema: Optional[CLIPTextModel]
@@ -141,7 +142,7 @@ class EveryDreamTrainingState:
 
 @torch.no_grad()
 def save_model(save_path, ed_state: EveryDreamTrainingState, global_step: int, save_ckpt_dir, yaml_name,
-               save_full_precision=False, save_optimizer_flag=False, save_ckpt=True):
+               save_full_precision=False, save_optimizer_flag=False, save_ckpt=True, plugin_runner: PluginRunner=None):
     """
     Save the model to disk
     """
@@ -166,7 +167,6 @@ def save_model(save_path, ed_state: EveryDreamTrainingState, global_step: int, s
             yaml_save_path = f"{os.path.join(save_ckpt_dir, os.path.basename(diffusers_model_path))}.yaml"
             logging.info(f" * Saving yaml to {yaml_save_path}")
             shutil.copyfile(yaml_name, yaml_save_path)
-
 
     if global_step is None or global_step == 0:
         logging.warning("  No model to save, something likely blew up on startup, not saving")
@@ -216,6 +216,11 @@ def save_model(save_path, ed_state: EveryDreamTrainingState, global_step: int, s
     if save_optimizer_flag:
         logging.info(f" Saving optimizer state to {save_path}")
         ed_state.optimizer.save(save_path)
+
+    plugin_runner.run_on_model_save(
+        ed_state=ed_state,
+        diffusers_save_path=diffusers_model_path
+    )
 
 
 def setup_local_logger(args):
@@ -784,6 +789,13 @@ def main(args):
 
     from plugins.plugins import PluginRunner
     plugin_runner = PluginRunner(plugins=plugins)
+    plugin_runner.run_on_model_load(
+        ed_state=EveryDreamTrainingState(unet=unet, text_encoder=text_encoder, tokenizer=tokenizer, vae=vae,
+                                         optimizer=None, train_batch=None, scheduler=noise_scheduler, unet_ema=None, text_encoder_ema=None),
+        optimizer_config=optimizer_config,
+        disable_unet_training=args.disable_unet_training,
+        disable_textenc_training=args.disable_textenc_training
+    )
 
     data_loader = DataLoaderMultiAspect(
         image_train_items=image_train_items,
@@ -872,7 +884,7 @@ def main(args):
                 time.sleep(2) # give opportunity to ctrl-C again to cancel save
                 save_model(interrupted_checkpoint_path, global_step=global_step, ed_state=make_current_ed_state(),
                            save_ckpt_dir=args.save_ckpt_dir, yaml_name=yaml, save_full_precision=args.save_full_precision,
-                           save_optimizer_flag=args.save_optimizer, save_ckpt=not args.no_save_ckpt)
+                           save_optimizer_flag=args.save_optimizer, save_ckpt=not args.no_save_ckpt, plugin_runner=plugin_runner)
             exit(_SIGTERM_EXIT_CODE)
         else:
             # non-main threads (i.e. dataloader workers) should exit cleanly
@@ -1054,7 +1066,7 @@ def main(args):
                                                                         vae=vae,
                                                                         diffusers_scheduler_config=inference_scheduler.config
                                                                         ).to(device)
-                sample_generator.generate_samples(inference_pipe, global_step, extra_info=extra_info)
+                sample_generator.generate_samples(inference_pipe, global_step, extra_info=extra_info, plugin_runner=plugin_runner)
 
                 # Cleanup
                 del inference_pipe
@@ -1169,7 +1181,7 @@ def main(args):
                     runt_loss_scale = (batch["runt_size"] / args.batch_size)**1.5 # further discount runts by **1.5
                     loss = loss * runt_loss_scale
 
-                ed_optimizer.step(loss, step, global_step)
+                ed_optimizer.step(loss, step, global_step, plugin_runner=plugin_runner, ed_state=make_current_ed_state())
 
                 if args.ema_decay_rate != None:
                     if ((global_step + 1) % args.ema_update_interval) == 0:
@@ -1239,7 +1251,7 @@ def main(args):
                     save_model(save_path, global_step=global_step, ed_state=make_current_ed_state(),
                                save_ckpt_dir=args.save_ckpt_dir, yaml_name=None,
                                save_full_precision=args.save_full_precision,
-                               save_optimizer_flag=args.save_optimizer, save_ckpt=not args.no_save_ckpt)
+                               save_optimizer_flag=args.save_optimizer, save_ckpt=not args.no_save_ckpt, plugin_runner=plugin_runner)
 
                 plugin_runner.run_on_step_end(epoch=epoch,
                                       global_step=global_step,
@@ -1286,7 +1298,7 @@ def main(args):
         save_path = make_save_path(epoch, global_step, prepend=("" if args.no_prepend_last else "last-"))
         save_model(save_path, global_step=global_step, ed_state=make_current_ed_state(),
                    save_ckpt_dir=args.save_ckpt_dir, yaml_name=yaml, save_full_precision=args.save_full_precision,
-                   save_optimizer_flag=args.save_optimizer, save_ckpt=not args.no_save_ckpt)
+                   save_optimizer_flag=args.save_optimizer, save_ckpt=not args.no_save_ckpt, plugin_runner=plugin_runner)
 
         total_elapsed_time = time.time() - training_start_time
         logging.info(f"{Fore.CYAN}Training complete{Style.RESET_ALL}")
@@ -1298,7 +1310,7 @@ def main(args):
         save_path = make_save_path(epoch, global_step, prepend="errored-")
         save_model(save_path, global_step=global_step, ed_state=make_current_ed_state(),
                    save_ckpt_dir=args.save_ckpt_dir, yaml_name=yaml, save_full_precision=args.save_full_precision,
-                   save_optimizer_flag=args.save_optimizer, save_ckpt=not args.no_save_ckpt)
+                   save_optimizer_flag=args.save_optimizer, save_ckpt=not args.no_save_ckpt, plugin_runner=plugin_runner)
         logging.info(f"{Fore.LIGHTYELLOW_EX}Model saved, re-raising exception and exiting.  Exception was:{Style.RESET_ALL}{Fore.LIGHTRED_EX} {ex} {Style.RESET_ALL}")
         raise ex
 
