@@ -34,6 +34,11 @@ class SampleRequest:
     size: tuple[int,int]
     wants_random_caption: bool = False
 
+    def __post_init__(self):
+        # self.prompt = self.prompt.replace("_foobar", "_--gztzixvhivswhlzsnyegivspijbeelk")
+        self.prompt = self.prompt.replace("_foobar", "gztzixvhivswhlzsnyegivspijbeelkwkvkxggjjeempptarprjksqrrrlsxi")
+        # self.prompt = self.prompt.replace("_foobar", "_--g")
+
     def __str__(self):
         rep = self.prompt
         if len(self.negative_prompt) > 0:
@@ -305,10 +310,11 @@ class SampleGenerator:
             requires_safety_checker=None, # avoid nag
             feature_extractor=None, # must be None if no safety checker
         )
-        if self.use_xformers:
-            pipe.enable_xformers_memory_efficient_attention()
-        return pipe
 
+        # if self.use_xformers:
+        #     pipe.enable_xformers_memory_efficient_attention()
+
+        return pipe
 
     @torch.no_grad()
     def _create_scheduler(self, scheduler_config: dict):

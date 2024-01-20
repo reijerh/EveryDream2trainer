@@ -15,15 +15,14 @@ limitations under the License.
 """
 import logging
 import os
-
+import random
 import torch
 from torch.utils.data import Dataset
+from torchvision import transforms
+
 from data.data_loader import DataLoaderMultiAspect
 from data.image_train_item import ImageTrainItem
-import random
-from torchvision import transforms
-from transformers import CLIPTokenizer
-import torch.nn.functional as F
+
 
 from plugins.plugins import PluginRunner
 
@@ -47,7 +46,8 @@ class EveryDreamBatch(Dataset):
                  plugin_runner:PluginRunner=None,
                  rated_dataset=False,
                  rated_dataset_dropout_target=0.5,
-                 name='train'
+                 name='train',
+                 caption_override=None,
                  ):
         self.data_loader = data_loader
         self.batch_size = data_loader.batch_size
@@ -67,6 +67,7 @@ class EveryDreamBatch(Dataset):
         self.image_train_items = []
         self.__update_image_train_items(1.0)
         self.name = name
+        self.caption_override = caption_override
 
         num_images = len(self.image_train_items)
         logging.info(f" ** Dataset '{name}': {num_images / self.batch_size:.0f} batches, num_images: {num_images}, batch_size: {self.batch_size}")
@@ -99,15 +100,35 @@ class EveryDreamBatch(Dataset):
             ]
         )
 
-        if self.shuffle_tags or train_item["shuffle_tags"]:
-            example["caption"] = train_item["caption"].get_shuffled_caption(self.seed, keep_tags=self.keep_tags)
+        if self.caption_override is not None:
+            example["caption"] = self.caption_override
         else:
-            example["caption"] = train_item["caption"].get_caption()
+            if self.shuffle_tags or train_item["shuffle_tags"]:
+                example["caption"] = train_item["caption"].get_shuffled_caption(self.seed, keep_tags=self.keep_tags)
+            else:
+                example["caption"] = train_item["caption"].get_caption()
+
+            # Prepend 'a photo of (_foobar, )' to the caption, if necessary
+            if not example["caption"].startswith("a photo of ") and not example["caption"].startswith("photo of "):
+                if "_foobar" not in example["caption"]:
+                    example["caption"] = "a photo of _foobar, " + example["caption"]
+                else:
+                    example["caption"] = "a photo of " + example["caption"]
+
+            # Replace '_foobar' with name to pick a specific number of tokens for the new concept
+            # (want to test if more tokens = better results)
+            # _--g = 3
+            example["caption"] = example["caption"].replace("_foobar",
+                                                            "gztzixvhivswhlzsnyegivspijbeelkwkvkxggjjeempptarprjksqrrrlsxi")
+            # example["caption"] = example["caption"].replace("_foobar", "_--g")
+
+        # print(example["caption"])
 
         example["image"] = self.plugin_runner.run_transform_pil_image(train_item["image"])
         example["image"] = image_transforms(example["image"])        
         example["caption"] = self.plugin_runner.run_transform_caption(example["caption"])
 
+        # TODO: warn for truncation
         if random.random() > (train_item.get("cond_dropout", self.conditional_dropout)):
             example["tokens"] = self.tokenizer(example["caption"],
                                                 truncation=True,

@@ -20,6 +20,7 @@ import random
 from datetime import datetime
 
 import torch
+from PIL.PngImagePlugin import PngInfo
 from diffusers import StableDiffusionPipeline, AutoencoderKL, UNet2DConditionModel, DPMSolverSDEScheduler
 from torch.cuda.amp import autocast
 from transformers import CLIPTextModel, CLIPTokenizer
@@ -63,20 +64,34 @@ def __create_inference_pipe(unet, text_encoder, tokenizer, scheduler, vae):
 def main(args):
     # Create output folder if it doesn't exist
     os.makedirs('output', exist_ok=True)
-    
+
+    # Enable SDP attention optimization in pytorch
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
+
     text_encoder = CLIPTextModel.from_pretrained(args.diffusers_path, subfolder="text_encoder")
     vae = AutoencoderKL.from_pretrained(args.diffusers_path, subfolder="vae")
     unet = UNet2DConditionModel.from_pretrained(args.diffusers_path, subfolder="unet")
-    sample_scheduler = DDIMScheduler.from_pretrained(args.diffusers_path, subfolder="scheduler")
+    # sample_scheduler = DDIMScheduler.from_pretrained(args.diffusers_path, subfolder="scheduler")
+    # sample_scheduler = PNDMScheduler.from_pretrained(args.diffusers_path, subfolder="scheduler")
+    # sample_scheduler = DPMSolverMultistepScheduler(beta_schedule='scaled_linear',
+    #                                                algorithm_type='sde-dpmsolver++',
+    #                                                steps_offset=1,
+    #                                                beta_start=0.00085,
+    #                                                beta_end=0.012)
+    # sample_scheduler = DPMSolverMultistepScheduler.from_pretrained(args.diffusers_path, subfolder="scheduler",
+    #                                                                 algorithm_type="dpmsolver++")
+    sample_scheduler = DPMSolverSDEScheduler.from_pretrained(args.diffusers_path, subfolder="scheduler",
+                                                             use_karras_sigmas=False, noise_sampler_seed=0)
+
     tokenizer = CLIPTokenizer.from_pretrained(args.diffusers_path, subfolder="tokenizer", use_fast=False)
 
     text_encoder.eval()
     vae.eval()
     unet.eval()
 
-    text_encoder.to("cuda")
-    vae.to("cuda")
-    unet.to("cuda")
+    text_encoder.to("cuda", dtype=torch.bfloat16)
+    vae.to("cuda", dtype=torch.bfloat16)
+    unet.to("cuda", dtype=torch.bfloat16)
 
     pipe = __create_inference_pipe(unet, text_encoder, tokenizer, sample_scheduler, vae)
 
@@ -89,9 +104,18 @@ def main(args):
                                    batch_size=args.batch_size)
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
         for i, img in enumerate(images):
+            # Save params in metadata
+            metadata = PngInfo()
+            metadata.add_text("model_path", args.diffusers_path)
+            metadata.add_text("seed", str(seed))
+            metadata.add_text("prompt", args.prompt)
+            metadata.add_text("cfg_scale", str(args.cfg_scale))
+
             img.save(
-                f"output/img_{args.prompt[0:210].replace(' ', '_')}_cfg_{args.cfg_scale}_{i}_{seed}_{timestamp}.png")
+                f"output/img_{args.prompt[0:210].replace(' ', '_')}_cfg_{args.cfg_scale}_{i}_{seed}_{timestamp}.png",
+                pnginfo=metadata)
 
 
 if __name__ == '__main__':

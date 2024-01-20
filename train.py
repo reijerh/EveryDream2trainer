@@ -576,6 +576,9 @@ def main(args):
         device = torch.device(f"cuda:{args.gpuid}")
         gpu = GPU(device)
         torch.backends.cudnn.benchmark = True
+
+        # Enable SDP attention optimization in pytorch
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
     else:
         logging.warning("*** Running on CPU. This is for testing loading/config parsing code only.")
         device = 'cpu'
@@ -802,7 +805,8 @@ def main(args):
         keep_tags=args.keep_tags,
         plugin_runner=plugin_runner,
         rated_dataset=args.rated_dataset,
-        rated_dataset_dropout_target=(1.0 - (args.rated_dataset_target_dropout_percent / 100.0))
+        rated_dataset_dropout_target=(1.0 - (args.rated_dataset_target_dropout_percent / 100.0)),
+        caption_override=args.caption_override
     )
 
     torch.cuda.benchmark = False
@@ -957,8 +961,19 @@ def main(args):
         else:
             encoder_hidden_states = encoder_hidden_states.last_hidden_state
 
-        noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+        # Minor unnoticable variation of image to prevent overfitting on the exact original image
+        # noise = noise + 0.1 * torch.randn_like(noise)
 
+        # Input Perturbation Reduces Exposure Bias in Diffusion Models'
+        # "For input perturbation, the idea is to make the model's training robust to an error during inference
+        # (some random noise at x_t).
+        # https://github.com/huggingface/diffusers/issues/3293
+        # new_noise = noise + 0.0 * torch.randn_like(noise)
+        new_noise = noise
+
+        noisy_latents = noise_scheduler.add_noise(latents, new_noise, timesteps)
+
+        # NB: We compare against the original noise, not the new noise
         if noise_scheduler.config.prediction_type == "epsilon":
             target = noise
         elif noise_scheduler.config.prediction_type in ["v_prediction", "v-prediction"]:
@@ -1356,6 +1371,7 @@ if __name__ == "__main__":
     argparser.add_argument("--save_optimizer", action="store_true", default=False, help="saves optimizer state with ckpt, useful for resuming training later")
     argparser.add_argument("--seed", type=int, default=555, help="seed used for samples and shuffling, use -1 for random")
     argparser.add_argument("--shuffle_tags", action="store_true", default=False, help="randomly shuffles CSV tags in captions, for booru datasets")
+    argparser.add_argument("--caption_override", type=str, default=None, help="override all captions with this text (ignores all other captions set in text files)")
     argparser.add_argument("--train_sampler", type=str, default="ddpm", help="noise sampler used for training, (default: ddpm)", choices=["ddpm", "pndm", "ddim"])
     argparser.add_argument("--keep_tags", type=int, default=0, help="Number of tags to keep when shuffle, used to randomly select subset of tags when shuffling is enabled, def: 0 (shuffle all)")
     argparser.add_argument("--wandb", action="store_true", default=False, help="enable wandb logging instead of tensorboard, requires env var WANDB_API_KEY")

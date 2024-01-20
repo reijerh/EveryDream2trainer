@@ -1,24 +1,27 @@
 {
-  "batch_size": 3,		
+  "batch_size": 4,		
   "seed": 555,
-  "cfgs": [7, 4],
-  "scheduler": "dpm++",		
-  "num_inference_steps": 15,	
-  "show_progress_bars": true, 
+  "cfgs": [1, 2, 3, 5, 7],
+  "_cfgs": [1.0, 1.5, 2.0, 2.5, 3.0],
+  "scheduler": "dpm++_sde",		
+  "num_inference_steps": 50,	
+  "show_progress_bars": true,
   "samples": [
     {
-      "prompt": "ted bennet and a man sitting on a sofa with a kitchen in the background",
-      "negative_prompt": "distorted, deformed"
+      "prompt": "a photo of _foobar, sitting on a bed in a hotel room, wearing a black dress, looking at the camera, soft lighting",
+      "size": [512, 768]
     },
     {
-      "prompt": "a photograph of ted bennet riding a bicycle",
-      "seed": -1
+      "prompt": "a photo of _foobar, close-up, sitting in her living room, looking at the camera, daylight",
+      "size": [512, 768]
     },
     {
-      "random_caption": true,		
-      "seed": 555,
-      "cfgs": [1,11],      
-      "size": [640, 384]
+      "prompt": "shot from above, naked, a photo of _foobar, lying on bed, full body shot, nude",
+      "size": [512, 768]
+    },
+    {
+      "prompt": "a photo of _foobar, shot from above, naked, lying on bed, full body shot, nude, _foobar",
+      "size": [512, 768]
     }
   ]
 }

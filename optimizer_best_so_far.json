@@ -2,7 +2,6 @@
     "doc": {
         "base": "base optimizer configuration for unet and text encoder",
         "text_encoder_overrides": "text encoder config overrides",
-        "text_encoder_lr_scale": "if LR not set on text encoder, sets the Lr to a multiple of the Base LR. for example, if base `lr` is 2e-6 and `text_encoder_lr_scale` is 0.5, the text encoder's LR will be set to `1e-6`.",
         "-----------------": "-----------------",
         "optimizer": "adamw, adamw8bit, lion",
         "optimizer_desc": "'adamw' in standard 32bit, 'adamw8bit' is bitsandbytes, 'lion' is lucidrains",
@@ -18,7 +17,7 @@
     },
     "base": {
         "optimizer": "adamw8bit",
-        "lr": 1.0e-06,
+        "lr": 4.0e-06,
         "lr_decay_steps": 30750,
         "lr_scheduler": "constant",
         "lr_warmup_steps": 0,
@@ -28,7 +27,7 @@
     },
     "text_encoder_overrides": {
         "optimizer": null,
-        "lr": 1.0e-07,
+        "lr": 1e-08,
         "lr_scheduler": "constant",
         "lr_decay_steps": 30750,
         "lr_warmup_steps": 0,
